@@ -17,7 +17,7 @@ export WITH_GMS=false
 export LANGUAGE=C
 export LC_ALL=C
 
-python3 - <<PY
+python3 <<'PY'
 from pathlib import Path
 import re
 
@@ -30,41 +30,44 @@ def disable_bp(path_str):
 
 def add_soong_imports(bp_path_str, imports_to_add):
     bp = Path(bp_path_str)
+
     if not bp.exists():
-        bp.write_text("soong_namespace {\\n    imports: [\\n    ],\\n}\\n")
+        bp.write_text('soong_namespace {\n    imports: [\n    ],\n}\n')
 
     s = bp.read_text()
 
     if "soong_namespace" not in s:
-        s = "soong_namespace {\\n    imports: [\\n    ],\\n}\\n\\n" + s
+        s = 'soong_namespace {\n    imports: [\n    ],\n}\n\n' + s
 
     ns_start = s.find("soong_namespace")
     ns_chunk = s[ns_start:ns_start + 800]
 
     if "imports:" not in ns_chunk:
         s = re.sub(
-            r"soong_namespace\\s*{\\s*",
-            "soong_namespace {\\n    imports: [\\n    ],\\n",
+            r"soong_namespace\s*{\s*",
+            "soong_namespace {\n    imports: [\n    ],\n",
             s,
             count=1,
         )
 
-    m = re.search(r"imports\\s*:\\s*\\[", s)
+    m = re.search(r"imports\s*:\s*\[", s)
+
     if not m:
         s = re.sub(
-            r"soong_namespace\\s*{\\s*",
-            "soong_namespace {\\n    imports: [\\n    ],\\n",
+            r"soong_namespace\s*{\s*",
+            "soong_namespace {\n    imports: [\n    ],\n",
             s,
             count=1,
         )
-        m = re.search(r"imports\\s*:\\s*\\[", s)
+        m = re.search(r"imports\s*:\s*\[", s)
 
     insert_at = m.end()
 
     lines = ""
     for imp in imports_to_add:
-        if f'"{imp}"' not in s:
-            lines += f'\\n        "{imp}",'
+        quoted = '"' + imp + '"'
+        if quoted not in s:
+            lines += '\n        "' + imp + '",'
 
     if lines:
         s = s[:insert_at] + lines + s[insert_at:]
@@ -92,9 +95,9 @@ for bp in [
 
 mk = Path("device/motorola/rtwo/lineage_rtwo.mk")
 s = mk.read_text()
-s = re.sub(r"(?m)^\\s*TARGET_CUSTOM_UDFPS\\s*:=.*\\n?", "", s)
-s = re.sub(r"(?m)^\\s*WITH_GMS\\s*:=.*\\n?", "", s)
-s = s.rstrip() + "\\n\\n# Lunaris options\\nTARGET_CUSTOM_UDFPS := true\\nWITH_GMS := false\\n"
+s = re.sub(r"(?m)^\s*TARGET_CUSTOM_UDFPS\s*:=.*\n?", "", s)
+s = re.sub(r"(?m)^\s*WITH_GMS\s*:=.*\n?", "", s)
+s = s.rstrip() + "\n\n# Lunaris options\nTARGET_CUSTOM_UDFPS := true\nWITH_GMS := false\n"
 mk.write_text(s)
 
 vh = Path("kernel/motorola/sm8550/include/uapi/linux/videodev2.h")
@@ -104,19 +107,19 @@ if vh.exists():
     if "#include <linux/time_types.h>" not in s:
         if "#include <linux/time.h>" in s:
             s = s.replace(
-                "#include <linux/time.h>\\n",
-                "#include <linux/time.h>\\n#include <linux/time_types.h>\\n",
+                "#include <linux/time.h>\n",
+                "#include <linux/time.h>\n#include <linux/time_types.h>\n",
                 1,
             )
         elif "#include <linux/types.h>" in s:
             s = s.replace(
-                "#include <linux/types.h>\\n",
-                "#include <linux/types.h>\\n#include <linux/time_types.h>\\n",
+                "#include <linux/types.h>\n",
+                "#include <linux/types.h>\n#include <linux/time_types.h>\n",
                 1,
             )
 
     s = re.sub(
-        r"struct\\s+(?:timespec|__kernel_old_timespec|__kernel_timespec)\\s+timestamp;",
+        r"struct\s+(?:timespec|__kernel_old_timespec|__kernel_timespec)\s+timestamp;",
         "struct __kernel_timespec timestamp;",
         s,
     )
@@ -134,7 +137,7 @@ for key in [
     "BOARD_SYSTEM_DLKMIMAGE_PARTITION_RESERVED_SIZE",
     "BOARD_VENDOR_DLKMIMAGE_PARTITION_RESERVED_SIZE",
 ]:
-    s = re.sub(rf"(?m)^\\s*{key}\\s*:=.*\\n?", "", s)
+    s = re.sub(rf"(?m)^\s*{key}\s*:=.*\n?", "", s)
 
 s = s.rstrip() + """
 
