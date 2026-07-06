@@ -25,7 +25,8 @@ def disable_bp(path_str):
     p = Path(path_str)
     if p.exists():
         disabled = p.with_name(p.name + ".disabled")
-        disabled.write_text(p.read_text())
+        if not disabled.exists():
+            disabled.write_text(p.read_text())
         p.unlink()
 
 def add_soong_imports(bp_path_str, imports_to_add):
@@ -84,14 +85,15 @@ add_soong_imports(
     ],
 )
 
-for bp in [
-    "hardware/qcom-caf/sm8450-6.6/display/core/snapalloc/Android.bp",
-    "hardware/qcom-caf/sm8450-6.6/display/hal/gralloc/Android.bp",
-    "hardware/qcom-caf/sm8650/display/gralloc/Android.bp",
-    "hardware/qcom-caf/sm8750/display/core/snapalloc/Android.bp",
-    "hardware/qcom-caf/sm8750/display/hal/gralloc/Android.bp",
+for folder in [
+    "hardware/qcom-caf/sm8450-6.6/display",
+    "hardware/qcom-caf/sm8650/display",
+    "hardware/qcom-caf/sm8750/display",
 ]:
-    disable_bp(bp)
+    root = Path(folder)
+    if root.exists():
+        for bp in root.rglob("Android.bp"):
+            disable_bp(str(bp))
 
 mk = Path("device/motorola/rtwo/lineage_rtwo.mk")
 s = mk.read_text()
