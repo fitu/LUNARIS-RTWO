@@ -16,12 +16,12 @@ if ! command -v patchelf >/dev/null 2>&1; then
   exit 1
 fi
 
+unset USE_CCACHE
 unset CC_WRAPPER
 unset CCACHE_EXEC
 unset CCACHE_DIR
 unset CCACHE_BASEDIR
 unset CCACHE_COMPILERCHECK
-export USE_CCACHE=0
 export CCACHE_DISABLE=1
 
 export WITH_GMS=false
@@ -118,18 +118,20 @@ def find_module_block(text, module_name):
 
     return start, end
 
-def find_list_end(text, list_start):
+def find_list_end(text, list_open_abs):
     depth = 0
-    for i in range(list_start, len(text)):
+
+    for i in range(list_open_abs, len(text)):
         if text[i] == "[":
             depth += 1
         elif text[i] == "]":
             depth -= 1
             if depth == 0:
                 return i
+
     return None
 
-def add_shared_lib_to_module(bp_path_str, module_name, lib_name):
+def add_list_item_to_module(bp_path_str, module_name, list_name, item_name):
     bp = Path(bp_path_str)
     if not bp.exists():
         return
@@ -143,26 +145,109 @@ def add_shared_lib_to_module(bp_path_str, module_name, lib_name):
     start, end = block_range
     block = s[start:end]
 
-    shared_match = re.search(r"shared_libs\s*:\s*\[", block)
+    m = re.search(r"\b" + re.escape(list_name) + r"\s*:\s*\[", block)
 
-    if shared_match:
-        shared_start_abs = start + shared_match.start()
-        list_open_abs = start + shared_match.end() - 1
+    if m:
+        list_open_abs = start + m.end() - 1
         list_close_abs = find_list_end(s, list_open_abs)
 
         if list_close_abs is None:
             return
 
-        shared_block = s[list_open_abs:list_close_abs]
+        list_block = s[list_open_abs:list_close_abs]
 
-        if '"' + lib_name + '"' not in shared_block:
+        if '"' + item_name + '"' not in list_block:
             insert_at = list_open_abs + 1
-            s = s[:insert_at] + '\n        "' + lib_name + '",' + s[insert_at:]
+            s = s[:insert_at] + '\n        "' + item_name + '",' + s[insert_at:]
     else:
-        addition = '\n    shared_libs: [\n        "' + lib_name + '",\n    ],\n'
+        addition = '\n    ' + list_name + ': [\n        "' + item_name + '",\n    ],\n'
         s = s[:end] + addition + s[end:]
 
     bp.write_text(s)
+
+def remove_list_item_from_module(bp_path_str, module_name, item_name):
+    bp = Path(bp_path_str)
+    if not bp.exists():
+        return
+
+    s = bp.read_text()
+    block_range = find_module_block(s, module_name)
+
+    if block_range is None:
+        return
+
+    start, end = block_range
+    block = s[start:end]
+
+    new_block = re.sub(
+        r'\n\s*"' + re.escape(item_name) + r'",?',
+        "",
+        block,
+    )
+
+    s = s[:start] + new_block + s[end:]
+    bp.write_text(s)
+
+def patch_gr_dma_mgr_for_dlopen(path_str):
+    p = Path(path_str)
+    if not p.exists():
+        return
+
+    s = p.read_text()
+
+    if "#include <dlfcn.h>" not in s:
+        include_matches = list(re.finditer(r'^\s*#include\s+[<"].+[>"]\s*$', s, flags=re.M))
+        if include_matches:
+            last = include_matches[-1]
+            s = s[:last.end()] + '\n#include <dlfcn.h>' + s[last.end():]
+        else:
+            s = '#include <dlfcn.h>\n' + s
+
+    helper = r'''
+namespace {
+using CreateVmMemFunc = std::unique_ptr<VmMem> (*)();
+
+std::unique_ptr<VmMem> CreateVmMemDlopen() {
+    static void *libvmmem_handle = nullptr;
+    static CreateVmMemFunc create_vm_mem = nullptr;
+
+    if (!libvmmem_handle) {
+        libvmmem_handle = dlopen("libvmmem.so", RTLD_NOW);
+        if (!libvmmem_handle) {
+            return nullptr;
+        }
+
+        create_vm_mem = reinterpret_cast<CreateVmMemFunc>(
+            dlsym(libvmmem_handle, "_ZN5VmMem11CreateVmMemEv"));
+
+        if (!create_vm_mem) {
+            return nullptr;
+        }
+    }
+
+    return create_vm_mem();
+}
+}  // namespace
+'''
+
+    if "CreateVmMemDlopen()" not in s:
+        marker = "namespace gralloc {"
+        pos = s.find(marker)
+
+        if pos != -1:
+            insert_at = pos + len(marker)
+            s = s[:insert_at] + "\n" + helper + s[insert_at:]
+        else:
+            include_matches = list(re.finditer(r'^\s*#include\s+[<"].+[>"]\s*$', s, flags=re.M))
+            if include_matches:
+                last = include_matches[-1]
+                s = s[:last.end()] + "\n" + helper + s[last.end():]
+            else:
+                s = helper + "\n" + s
+
+    s = s.replace("VmMem::CreateVmMem()", "CreateVmMemDlopen()")
+
+    p.write_text(s)
 
 disable_bp("prebuilts/misc/protobuf_vendorcompat/Android.bp")
 
@@ -176,10 +261,30 @@ update_soong_imports(
     ],
 )
 
-add_shared_lib_to_module(
-    "hardware/qcom-caf/sm8550/display/gralloc/Android.bp",
+gralloc_bp = "hardware/qcom-caf/sm8550/display/gralloc/Android.bp"
+
+remove_list_item_from_module(
+    gralloc_bp,
     "libgralloccore",
     "libvmmem",
+)
+
+add_list_item_to_module(
+    gralloc_bp,
+    "libgralloccore",
+    "shared_libs",
+    "libdl",
+)
+
+add_list_item_to_module(
+    gralloc_bp,
+    "libgralloccore",
+    "header_libs",
+    "libvmmem_headers",
+)
+
+patch_gr_dma_mgr_for_dlopen(
+    "hardware/qcom-caf/sm8550/display/gralloc/gr_dma_mgr.cpp"
 )
 
 for folder in [
